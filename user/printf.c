@@ -111,3 +111,27 @@ printf(const char *fmt, ...)
   va_start(ap, fmt);
   vprintf(1, fmt, ap);
 }
+
+// 放在这感觉不太合适, 但是这样不需要修改 makefile
+// wrapped system call
+void unix_error(char *msg) {
+    fprintf(2, "%s\n", msg);
+    exit(1);
+}
+
+int Fork(){
+    int pid;
+    if((pid = fork()) < 0){
+        unix_error("Fork Error!");
+        exit(1);
+    }
+    return pid;
+}
+
+void Pipe(int* fd) {
+    int ret;
+    ret = pipe(fd);
+    if(ret == -1) {
+        unix_error("Failed to creater a pipe!\n");
+    }
+}
