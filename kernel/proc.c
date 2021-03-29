@@ -150,6 +150,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->trace_mask = 0;
 }
 
 // Create a user page table for a given process,
@@ -294,6 +295,9 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+  
+  // 复制 trace_mask
+  np->trace_mask = p->trace_mask;
 
   release(&np->lock);
 
@@ -692,4 +696,18 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 get_nproc(void){
+    uint num = 0;
+    uint i = 0;
+    for(; i < NPROC; ++i) {
+        // 需要加锁, 详情见 proc.h
+        acquire(&(proc[i].lock));
+        if(proc[i].state != UNUSED) {
+            ++num;
+        }
+        release(&(proc[i].lock));
+    }
+    return num;
 }
