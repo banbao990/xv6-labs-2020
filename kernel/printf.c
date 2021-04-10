@@ -132,3 +132,17 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+// backtrace
+void backtrace() {
+    // 获取当前的帧指针 frame pointer
+    uint64 fp = r_fp();
+    uint64 down = PGROUNDDOWN(fp);
+    uint64 up = PGROUNDUP(fp);
+    // 栈向下增长, 因此循环的时候 fp 应该是越来越大
+    while(fp < up && fp > down) {
+        printptr(*(uint64 *)(fp - 8));
+        consputc('\n');
+        fp = *(uint64 *)(fp - 16);
+    }
+}

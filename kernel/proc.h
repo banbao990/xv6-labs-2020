@@ -103,4 +103,12 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // 添加几个变量辅助实现 sysalarm()
+  int ticks_for_alarm;          // 多久时间调用一次 handler
+  void (*alarm_handler)();      // handler
+  int ticks_used;               // 已经使用了多少 ticks(对 ticks_for_alarm 取模)
+  struct trapframe trapframe2;  // 保存 sysalarm 的寄存器状态
+                                // kernel 的 4 个不需要, 但是为了方便都写了
+  int is_alarm;                 // 是否调用 handler
 };
