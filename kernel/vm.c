@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -101,13 +103,17 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
-  if((*pte & PTE_U) == 0)
-    return 0;
-  pa = PTE2PA(*pte);
+  // if(pte == 0)
+  //   return 0;
+  // if((*pte & PTE_V) == 0)
+  //   return 0;
+  // if((*pte & PTE_U) == 0)
+  //   return 0;
+  if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0) {
+      pa = alloc_page(myproc(), va);
+    } else {
+    pa = PTE2PA(*pte);
+  }
   return pa;
 }
 
@@ -180,10 +186,15 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((pte = walk(pagetable, a, 0)) == 0) {
+      // panic("uvmunmap: walk");
+      continue;
+    }
+    // 分配了而且映射了的内存才需要释放
+    if((*pte & PTE_V) == 0) {
+      // panic("uvmunmap: not mapped");
+      continue;
+    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -314,10 +325,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    if((pte = walk(old, i, 0)) == 0){ 
+    // panic("uvmcopy: pte should exist");
+      continue;
+    }
+    if((*pte & PTE_V) == 0) {
+      // panic("uvmcopy: page not present");
+      continue;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -439,4 +454,34 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+uint64          
+alloc_page(struct proc* p, uint64 vm_addr){
+  // 访问的虚拟地址没有申请
+  // 虚拟地址越界
+  if(vm_addr >= p->sz) {
+    return 0;
+  }
+  // 用户栈溢出
+  uint64 ustack = p->trapframe->sp;
+  if(vm_addr < (uint64)PGROUNDDOWN(ustack)) {
+    return 0;
+  }
+  vm_addr = PGROUNDDOWN(vm_addr);
+  pagetable_t pagetable = p->pagetable;
+  char *mem;
+  // 为虚拟页分配一页物理页
+  mem = kalloc();
+  // 当分配不到物理页时的处理
+  if(mem == 0) {
+    return 0;
+  } 
+  // 刷零
+  memset(mem, 0, PGSIZE);
+  if(mappages(pagetable, vm_addr, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+    kfree(mem);
+    return 0;
+  }
+  return (uint64)mem;
 }
