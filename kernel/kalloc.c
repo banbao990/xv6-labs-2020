@@ -94,12 +94,12 @@ kalloc(void)
   r = kmem.freelist;
   if(r) {
     kmem.freelist = r->next;
+    kmem.ref_cnt[get_ref_cnt_index((uint64)r)] = 1;
   }
   release(&kmem.lock);
 
   if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
-    kmem.ref_cnt[get_ref_cnt_index((uint64)r)] = 1;
   }
   return (void*)r;
 }
