@@ -21,6 +21,8 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  char *ref_cnt;   // 用于记录 reference count 的一个数组
+  uint64 ref_start; // 开始分配的物理内存的起始地址
 } kmem;
 
 void
@@ -34,9 +36,24 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  // 数组元素为 char(最多 64 进程)
+  // sizeof(char) = 1, 不需要乘
+  // 计算大小(偏大)
+  uint64 size = ((uint64) pa_end - (uint64) pa_start) >> PGSHIFT;
+  // 初始化为全 1
+  // memset 逐字节设置
+  memset(pa_start, 1, size);
+  // 开始分配物理内存的位置
+  p = (char *)pa_start + size;
+  p = (char *)PGROUNDUP((uint64)p);
+  acquire(&kmem.lock);
+  // 数组起始位置设置为 pa_start
+  kmem.ref_cnt = (char *)pa_start;
+  kmem.ref_start = (uint64)p;
+  release(&kmem.lock);
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -51,11 +68,14 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  r = (struct run*)pa;
+  char num = ref_increment((uint64)pa, (char)-1);
+  // 引用计数不为 0
+  if(num > 0) {
+    return;
+  }
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
@@ -72,11 +92,28 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+  }
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    kmem.ref_cnt[get_ref_cnt_index((uint64)r)] = 1;
+  }
   return (void*)r;
+}
+
+/* 带锁 */
+char ref_increment(uint64 pa, char inc) {
+  acquire(&kmem.lock);
+  char ans = (kmem.ref_cnt[get_ref_cnt_index(pa)] += inc);
+  release(&kmem.lock);
+  return ans;
+}
+
+/* 不带锁 */
+uint64 get_ref_cnt_index(uint64 pa) {
+  uint64 ans = (pa - kmem.ref_start) >> PGSHIFT;
+  return ans;
 }

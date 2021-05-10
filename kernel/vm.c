@@ -310,8 +310,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
-  uint flags;
-  char *mem;
+  uint64 flags;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,20 +319,34 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    // 之前的 PTE_W, PTE_COW
+    uint64 pte_w_cow_before = *pte & (PTE_W|PTE_COW);
+    // 对于可以进行写操作的 PTE, 我们才使用 COW 策略
+    // 如果这个页不可写, 我们直接不复制即可
+    if(*pte & PTE_W) {
+      *pte ^= PTE_W; // *pte &= ~PTE
+      *pte |= PTE_COW;
     }
+    flags = PTE_FLAGS(*pte);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      // kfree(mem);
+      // 恢复原来的 flags
+      *pte &= ~(PTE_COW | PTE_W);
+      *pte |= pte_w_cow_before; 
+      return -1;
+    }
+    // 引用计数 +1
+    ref_increment(pa, (char)1);
   }
   return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+//  err:
+//   uvmunmap(new, 0, i / PGSIZE, 1);
+//   return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -358,7 +372,22 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    if (va0 >= MAXVA)
+      return -1;
+    // 先判断是不是 COW 页
+    pte_t* pte = walk(pagetable, va0, 0);
+    if(pte == 0)
+      return -1;
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+    // 不是 COW 页
+    if((*pte & PTE_COW) == 0) {
+      pa0 = walkaddr(pagetable, va0);
+    } else {
+      pa0 = cow_handler(pagetable, va0);
+    }
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -439,4 +468,60 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+/* va 需要对齐 */
+uint64
+cow_handler(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  // 不是 COW 页
+  if((*pte & PTE_COW) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+
+  // 没有内存了
+  char *mem;
+  if((mem = kalloc()) == 0) 
+    return 0;
+  memmove(mem, (char*)pa, PGSIZE);
+
+  // 之前的 PTE_W, PTE_COW
+  // uint64 pte_w_cow_before = *pte & (PTE_W|PTE_COW);
+  // *pte &= ~PTE_COW;
+  // *pte |= PTE_W;
+  // uint64 flags = PTE_FLAGS(*pte);
+  // if(mappages(pagetable, va, PGSIZE, (uint64)pa, flags) != 0) {
+  //   kfree(mem);
+  //   // 恢复原来的 flags
+  //   *pte &= ~(PTE_COW | PTE_W);
+  //   *pte |= pte_w_cow_before; 
+  //   return 0;
+  // }
+
+  // // 引用数不为 1
+  // uint64 num = ref_increment(pa, (char)-1);
+  // if(num > 1) {
+  //   *pte &= ~PTE_W;
+  //   *pte |= PTE_COW;
+  // }
+
+  uint64 flags = PTE_FLAGS(*pte);
+  kfree((void*)pa);
+  flags = (flags & ~PTE_COW) | PTE_W;
+  *pte = PA2PTE((uint64)mem) | flags;
+
+  return (uint64)mem;
 }
