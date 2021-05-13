@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 // initialize the proc table at boot time.
 void
@@ -34,12 +35,12 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      p->kstack = 0;
   }
   kvminithart();
 }
@@ -121,6 +122,33 @@ found:
     return 0;
   }
 
+  // An kernel page table
+  // 分配内核页表
+  p->pagetable_k = proc_pagetable_k(p);
+  if(p->pagetable_k == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 映射内核栈
+  // Allocate a page for the process's kernel stack.
+  // Map it high in memory, followed by an invalid guard page.
+  char *pa = kalloc();
+  if(pa == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  uint64 va = KSTACK((int) (p - proc));
+  if(kvmmap_k(p->pagetable_k, va, (uint64)pa, PGSIZE, PTE_R | PTE_W) != 0) {
+    kfree((void*)pa);
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  p->kstack = va;
+  
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -142,6 +170,16 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  // 还得释放栈的映射(在释放整个页表之前)
+  if(p->kstack != 0) {
+    uvmunmap(p->pagetable_k, p->kstack, 1, 1);
+    // uint64 pa = walkaddr(p->pagetable_k, p->kstack);
+    // kfree((void*)pa);
+  }
+  if(p->pagetable_k)
+    proc_freepagetable_k(p->pagetable_k);
+
+  p->pagetable_k = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -150,6 +188,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->kstack = 0;
 }
 
 // Create a user page table for a given process,
@@ -473,8 +512,10 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->pagetable_k));
+        sfence_vma();
         swtch(&c->context, &p->context);
-
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -696,4 +737,71 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+static uint64 addr_kernel[] = {
+  UART0,
+  VIRTIO0,
+  CLINT,
+  PLIC,
+  KERNBASE,
+  (uint64)etext,
+  TRAMPOLINE,
+};
+
+void check_proc_freepagetable_k(pagetable_t pagetable, int num) {
+  for(int i = 0; i < num; ++i) {
+    uvmunmap(pagetable, addr_kernel[i], 1, 0);
+  }
+}
+
+pagetable_t proc_pagetable_k(struct proc *p) {
+  pagetable_t pagetable;
+
+  // An empty page table.
+  pagetable = uvmcreate();
+  if(pagetable == 0)
+    return 0;
+
+  // 模仿 kvminit()
+  int ret = 0;
+  int num = 0;
+  ret = kvmmap_k(pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  if(ret != 0) goto bad;
+  ++num;
+  ret = kvmmap_k(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  if(ret != 0) goto bad;
+  ++num;
+  return pagetable;
+
+bad:
+  check_proc_freepagetable_k(pagetable, num);
+  return 0;
+}
+
+
+void proc_freepagetable_k(pagetable_t pagetable) {
+  // uvmunmap(pagetable, UART0, 1, 0);
+  // uvmunmap(pagetable, VIRTIO0, 1, 0);
+  // uvmunmap(pagetable, CLINT, 1, 0);
+  // uvmunmap(pagetable, PLIC, 1, 0);
+  // uvmunmap(pagetable, KERNBASE, 1, 0);
+  // uvmunmap(pagetable, (uint64)etext, 1, 0);
+  // uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  freewalk_k(pagetable);
 }

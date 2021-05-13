@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -132,7 +134,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->pagetable_k, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -465,4 +467,31 @@ void vmprint_help(pagetable_t pagetable, int level) {
       }
     }
   }
+}
+
+
+int kvmmap_k(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm) {
+  if(mappages(pagetable, va, sz, pa, perm) != 0) {
+    // panic("kvmmap_k");
+    return -1;
+  }
+  return 0;
+}
+
+void freewalk_k(pagetable_t pagetable) {
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freewalk_k((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+    // 这是允许的
+    // } else if(pte & PTE_V){
+    //   panic("freewalk: leaf");
+    // }
+  }
+  kfree((void*)pagetable);
 }

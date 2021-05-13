@@ -86,6 +86,8 @@ void            panic(char*) __attribute__((noreturn));
 void            printfinit(void);
 
 // proc.c
+pagetable_t     proc_pagetable_k(struct proc *);
+void            proc_freepagetable_k(pagetable_t);
 int             cpuid(void);
 void            exit(int);
 int             fork(void);
@@ -158,6 +160,8 @@ void            uartputc_sync(int);
 int             uartgetc(void);
 
 // vm.c
+int             kvmmap_k(pagetable_t, uint64, uint64, uint64, int);
+void            freewalk_k(pagetable_t);
 void            vmprint(pagetable_t);
 void            vmprint_help(pagetable_t pagetable, int level);
 void            kvminit(void);
