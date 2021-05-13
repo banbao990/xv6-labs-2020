@@ -41,14 +41,25 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
+  uint64 addr;
   int n;
+  struct proc *p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
+  addr = p->sz;
+  if(addr + n >= PLIC) {
+    return -1;
+  }
   if(growproc(n) < 0)
     return -1;
+  // 没有检查返回值
+  if(n > 0) {
+    uvmalloc_k(p->pagetable_k, p->pagetable, addr, addr + n);
+  } else if(n < 0){
+    // 不释放物理内存
+    uvmdealloc_k(p->pagetable_k, addr + n, addr);
+  }
   return addr;
 }
 

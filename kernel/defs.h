@@ -86,6 +86,7 @@ void            panic(char*) __attribute__((noreturn));
 void            printfinit(void);
 
 // proc.c
+uint64          uvmdealloc_k(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
 pagetable_t     proc_pagetable_k(struct proc *);
 void            proc_freepagetable_k(pagetable_t);
 int             cpuid(void);
@@ -159,7 +160,12 @@ void            uartputc(int);
 void            uartputc_sync(int);
 int             uartgetc(void);
 
+// vmcopyin.c
+int             copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);
+int             copyinstr_new(pagetable_t, char *, uint64, uint64);
+
 // vm.c
+uint64          uvmalloc_k (pagetable_t pgnew, pagetable_t pgold, uint64 oldsz, uint64 newsz);
 int             kvmmap_k(pagetable_t, uint64, uint64, uint64, int);
 void            freewalk_k(pagetable_t);
 void            vmprint(pagetable_t);

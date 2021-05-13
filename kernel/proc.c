@@ -259,6 +259,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  uvmalloc_k(p->pagetable_k, p->pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -333,7 +334,8 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
-
+  // 没有检查返回值
+  uvmalloc_k(np->pagetable_k, np->pagetable, 0, p->sz);
   release(&np->lock);
 
   return pid;
@@ -742,7 +744,7 @@ procdump(void)
 static uint64 addr_kernel[] = {
   UART0,
   VIRTIO0,
-  CLINT,
+  // CLINT,
   PLIC,
   KERNBASE,
   (uint64)etext,
@@ -772,9 +774,9 @@ pagetable_t proc_pagetable_k(struct proc *p) {
   ret = kvmmap_k(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
   if(ret != 0) goto bad;
   ++num;
-  ret = kvmmap_k(pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-  if(ret != 0) goto bad;
-  ++num;
+  // ret = kvmmap_k(pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  // if(ret != 0) goto bad;
+  // ++num;
   ret = kvmmap_k(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   if(ret != 0) goto bad;
   ++num;
@@ -804,4 +806,16 @@ void proc_freepagetable_k(pagetable_t pagetable) {
   // uvmunmap(pagetable, (uint64)etext, 1, 0);
   // uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   freewalk_k(pagetable);
+}
+
+
+// 不释放物理内存
+uint64 uvmdealloc_k(pagetable_t pagetable, uint64 oldsz, uint64 newsz) {
+  if(newsz >= oldsz)
+    return oldsz;
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 0);
+  }
+  return newsz;
 }
