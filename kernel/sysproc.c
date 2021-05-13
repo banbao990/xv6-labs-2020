@@ -55,7 +55,10 @@ sys_sbrk(void)
     return -1;
   // 没有检查返回值
   if(n > 0) {
-    uvmalloc_k(p->pagetable_k, p->pagetable, addr, addr + n);
+    if(uvmalloc_k(p->pagetable_k, p->pagetable, addr, addr + n) == -1) {
+      growproc(-n);
+      return -1;
+    }
   } else if(n < 0){
     // 不释放物理内存
     uvmdealloc_k(p->pagetable_k, addr + n, addr);

@@ -122,7 +122,8 @@ exec(char *path, char **argv)
   uvmunmap(p->pagetable_k, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
   // 全部都分配好了再复制
   // 没有检查返回值
-  uvmalloc_k(p->pagetable_k, p->pagetable, 0, sz);
+  if(uvmalloc_k(p->pagetable_k, p->pagetable, 0, sz) == -1)
+    goto bad;
 
   if(p->pid==1) vmprint(p->pagetable);
   return argc; // this ends up in a0, the first argument to main(argc, argv)

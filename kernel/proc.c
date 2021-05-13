@@ -259,7 +259,8 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-  uvmalloc_k(p->pagetable_k, p->pagetable, 0, p->sz);
+  if(uvmalloc_k(p->pagetable_k, p->pagetable, 0, p->sz) == -1)
+    panic("usertinit error!");
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -313,6 +314,12 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  // 没有检查返回值
+  if(uvmalloc_k(np->pagetable_k, np->pagetable, 0, p->sz) == -1) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
   np->sz = p->sz;
 
   np->parent = p;
@@ -334,8 +341,6 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
-  // 没有检查返回值
-  uvmalloc_k(np->pagetable_k, np->pagetable, 0, p->sz);
   release(&np->lock);
 
   return pid;

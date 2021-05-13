@@ -515,7 +515,8 @@ uint64 uvmalloc_k (pagetable_t pgnew, pagetable_t pgold, uint64 oldsz, uint64 ne
     // 分配
     pte_new = walk(pgnew, a, 1);
     if(pte_new == 0) {
-      panic("uvmalloc_k: kalloc error!");
+      // panic("uvmalloc_k: kalloc error!");
+      return -1;
     }
     // 设置映射
     *pte_new = (*pte_old) & (~PTE_U);
