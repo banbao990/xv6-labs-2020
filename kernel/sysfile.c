@@ -283,6 +283,38 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+// 返回如果不为 0, 计数 +1
+static struct inode*
+namei_check_symlink(char *path, uint depth, int omode) {
+  // 利用一个显式的递归深度检测环
+  if(depth > 10) {
+      return 0;
+  }
+
+  struct inode *ip;
+
+  // 文件不存在(symlink 允许 target 不存在)
+  if((ip = namei(path)) == 0){
+    return 0;
+  }
+
+  ilock(ip);
+  // 如果带有 O_NOFOLLOW flag, 则只需要打开软链接文件本身
+  if(!(omode & O_NOFOLLOW) && ip->type == T_SYMLINK) {
+    char next[MAXPATH];
+    // 保存在 data 的开始
+    if(readi(ip, 0, (uint64)next, 0, MAXPATH) == 0) {
+      iunlock(ip);
+      return 0;
+    }
+    iunlock(ip);
+    iput(ip); // 接着下一个文件了, 因此当前文件的引用计数-1
+    return namei_check_symlink(next, depth + 1 ,omode);
+  }
+  iunlock(ip);
+  return ip;
+}
+
 uint64
 sys_open(void)
 {
@@ -304,9 +336,13 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+    // if((ip = namei(path)) == 0){
+    //   end_op();
+    //   return -1;
+    // }
+    if((ip = namei_check_symlink(path , 0, omode)) == 0) {
+       end_op();
+       return -1;
     }
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
@@ -483,4 +519,77 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+// 仿照 sys_link 实现即可
+// 效果是将 old 指向 new
+uint64
+sys_symlink (void) {
+  char name[DIRSIZ], target[MAXPATH], path[MAXPATH];
+  struct inode *dp, *ip;
+
+  // 获取参数
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  // target 可以不存在
+  // if((ip = namei(path)) == 0){
+  //   end_op();
+  //   return -1;
+  // }
+
+  // target 的引用计数增加
+  if((ip = namei(target)) != 0) {
+    ilock(ip);
+    // 不能是文件夹
+    // 测试数据中没有文件夹的数据
+    if(ip->type == T_DIR) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    ip->nlink++;
+    iupdate(ip);
+    iunlockput(ip);
+  }
+  
+  // link 的实现是 new 文件不存在, 因此直接使用 dirlink 即可
+  // 在测试数据中, symlink 的 path 文件可以存在, 因此方法不太一样
+  
+  // 先检查 path 节点是否存在, 不存在则新建一个
+  if((dp = namei(path)) == 0) {
+    // path 的父节点得存在
+    if((dp = nameiparent(path, name)) == 0) {
+      goto bad;
+    }
+    else {
+      iput(dp);
+      // 新建一个 path 节点
+      // 返回的 dp 带锁且引用计数 +1
+      if((dp = create(path, T_SYMLINK, 0, 0)) == 0) {
+        goto bad;
+      }
+      iunlock(dp);
+    }
+  }
+  
+  ilock(dp);
+  // 把 target 写入 dp 的 data 字段中
+  writei(dp, 0, (uint64)target, 0, MAXPATH);
+  // 设置 dp 类型
+  // dp->type = T_SYMLINK;(已经设置了)
+  iunlockput(dp);
+  // iput(ip); 之前调用 iunlockput() 了
+  end_op();
+  return 0;
+
+bad:
+  ilock(ip);
+  ip->nlink--;
+  iupdate(ip);
+  iunlockput(ip);
+  end_op();
+  return -1;
 }
