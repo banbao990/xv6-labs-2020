@@ -1,0 +1,12 @@
+# xv6-labs-2020
+- [x] lab0-utils
+- [x] lab1-syscall
+- [x] lab2-pagetable
+- [x] lab3-traps
+- [x] lab4-lazy-allocation
+- [x] lab5-copyonwrite
+- [x] lab6-multi-threading
+- [x] lab7-lock
+- [x] lab8-file-system
+- [x] lab9-mmap
+- [ ] lab10-net
